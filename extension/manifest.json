@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Speedrun.com Rejected Runs",
+  "version": "1.0",
+  "description": "Показывает отклоненные раны (rejected runs) для игр на speedrun.com",
+  "permissions": [
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://www.speedrun.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["*://*.speedrun.com/*"],
+      "js": ["content.js"],
+      "css": ["style.css"]
+    }
+  ]
+}
