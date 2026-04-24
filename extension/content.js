@@ -7,6 +7,9 @@ function initObserver() {
     // 1. Пытаемся найти открытую панель фильтров, чтобы встроить туда наш селект
     tryInjectReactFilter();
 
+    // 1.5. Заменяем иконки модераторов на эмодзи какашки
+    replaceModeratorIcons();
+
     // 2. Следим за наличием таблицы
     const table = document.querySelector('table'); 
     
@@ -427,7 +430,15 @@ async function fetchAndInjectRuns(tableElement) {
                 cellContents[i] = combinedPlayerHTML;
                 placedPlayer = true;
             } else if (h.includes('time') || h.includes('время') || h.includes('rt') || h.includes('igt')) {
-                cellContents[i] = `<span style="font-weight:bold;">${timeStr}</span>`;
+                let specificTimeStr = timeStr;
+                if (h === 'lrt' || h.includes('load')) {
+                    specificTimeStr = run.times.realtime_noloads ? formatTime(run.times.realtime_noloads) : '-';
+                } else if (h === 'igt' || h.includes('in-game')) {
+                    specificTimeStr = run.times.ingame ? formatTime(run.times.ingame) : '-';
+                } else if (h === 'rta' || h === 'real time' || h === 'rt') {
+                    specificTimeStr = run.times.realtime ? formatTime(run.times.realtime) : timeStr;
+                }
+                cellContents[i] = `<span style="font-weight:bold;">${specificTimeStr}</span>`;
                 placedTime = true;
             } else if (h.includes('platform') || h.includes('платформа')) {
                 cellContents[i] = platVal;
@@ -468,31 +479,106 @@ async function fetchAndInjectRuns(tableElement) {
 
     // 5. Insert rows in sorted order by mapping existing times
     const existingRows = Array.from(tbody.querySelectorAll('tr:not(.sr-rr-inline-row):not(.empty-state)'));
-    const timeColIdx = headers.findIndex(h => h.includes('time') || h.includes('время') || h.includes('rt') || h.includes('igt'));
-    // Если не нашли колонку, пытаемся хотя бы примерно взять колонку со временем (обычно 2 или 3)
-    const fallbackTimeIdx = timeColIdx !== -1 ? timeColIdx : (expectedCols > 3 ? 3 : 2);
-    
-    newRows.sort((a, b) => parseFloat(a.dataset.time_t) - parseFloat(b.dataset.time_t));
+    const timeColsInfo = [];
+    headers.forEach((h, idx) => {
+       if (h.includes('time') || h.includes('время') || h.includes('rt') || h.includes('igt') || h.includes('load') || h.includes('in-game')) {
+           timeColsInfo.push(idx);
+       }
+    });
 
-    if (existingRows.length === 0) {
+    if (timeColsInfo.length === 0) {
+        timeColsInfo.push(expectedCols > 3 ? 3 : 2); // fallback
+    }
+
+    // Determine primary timer logic
+    const urlParams = new URL(window.location.href);
+    let defaultTimerKey = urlParams.searchParams.get('timer'); 
+    if (!defaultTimerKey && runs.length > 0) {
+        const firstRun = runs.find(r => r.times && r.times.primary);
+        if (firstRun) {
+            if (firstRun.times.primary === firstRun.times.realtime_noloads) defaultTimerKey = 'twl';
+            else if (firstRun.times.primary === firstRun.times.ingame) defaultTimerKey = 'ingame';
+            else if (firstRun.times.primary === firstRun.times.realtime) defaultTimerKey = 'realtime';
+        }
+    }
+
+    timeColsInfo.sort((idxA, idxB) => {
+        const hA = headers[idxA] || '';
+        const hB = headers[idxB] || '';
+        let scoreA = 0;
+        let scoreB = 0;
+        if (defaultTimerKey === 'twl' && (hA.includes('lrt') || hA.includes('load'))) scoreA = 10;
+        if (defaultTimerKey === 'realtime' && (hA === 'rta' || hA === 'real time' || hA === 'rt')) scoreA = 10;
+        if (defaultTimerKey === 'ingame' && (hA === 'igt' || hA.includes('in-game'))) scoreA = 10;
+        
+        if (defaultTimerKey === 'twl' && (hB.includes('lrt') || hB.includes('load'))) scoreB = 10;
+        if (defaultTimerKey === 'realtime' && (hB === 'rta' || hB === 'real time' || hB === 'rt')) scoreB = 10;
+        if (defaultTimerKey === 'ingame' && (hB === 'igt' || hB.includes('in-game'))) scoreB = 10;
+
+        return scoreB - scoreA;
+    });
+
+    // Populate sort keys for new rows
+    newRows.forEach(row => {
+       const keyVals = [];
+       timeColsInfo.forEach(idx => {
+           let txt = '';
+           if (row.children[idx]) {
+               txt = row.children[idx].textContent.trim();
+           }
+           keyVals.push(timeToSeconds(txt));
+       });
+       row.dataset.sortKeys = JSON.stringify(keyVals);
+    });
+
+    // Sort new rows amongst themselves
+    newRows.sort((a, b) => {
+        const keysA = JSON.parse(a.dataset.sortKeys);
+        const keysB = JSON.parse(b.dataset.sortKeys);
+        for (let i = 0; i < keysA.length; i++) {
+            if (keysA[i] !== keysB[i]) return keysA[i] - keysB[i];
+        }
+        return 0;
+    });
+
+    const existingTimes = existingRows.map(row => {
+       const cells = Array.from(row.querySelectorAll('td, th'));
+       const keyVals = [];
+       timeColsInfo.forEach(idx => {
+           let txt = '';
+           if (cells[idx]) txt = cells[idx].textContent.trim();
+           keyVals.push(timeToSeconds(txt));
+       });
+       return { row, keyVals };
+    });
+
+    if (existingTimes.length === 0) {
       newRows.forEach(nr => tbody.appendChild(nr));
     } else {
       let newRowIdx = 0;
-      for (let i = 0; i < existingRows.length; i++) {
-        const row = existingRows[i];
-        const cells = Array.from(row.querySelectorAll('td, th'));
+      for (let i = 0; i < existingTimes.length; i++) {
+        const ext = existingTimes[i];
         
-        if (cells.length > fallbackTimeIdx) {
-          const timeText = cells[fallbackTimeIdx].textContent.trim();
-          const existingT = timeToSeconds(timeText);
-          
-          while (newRowIdx < newRows.length && parseFloat(newRows[newRowIdx].dataset.time_t) <= existingT) {
-            tbody.insertBefore(newRows[newRowIdx], row);
-            newRowIdx++;
-          }
+        while (newRowIdx < newRows.length) {
+            const nrKeys = JSON.parse(newRows[newRowIdx].dataset.sortKeys);
+            
+            let comesBefore = false;
+            for (let k = 0; k < nrKeys.length; k++) {
+                if (nrKeys[k] !== ext.keyVals[k]) {
+                    comesBefore = nrKeys[k] < ext.keyVals[k];
+                    break;
+                }
+            }
+            
+            if (comesBefore) {
+                tbody.insertBefore(newRows[newRowIdx], ext.row);
+                newRowIdx++;
+            } else {
+                break;
+            }
         }
       }
-      // Insert remaining at bottom
+      
       while (newRowIdx < newRows.length) {
         tbody.appendChild(newRows[newRowIdx]);
         newRowIdx++;
@@ -541,6 +627,30 @@ if (document.body) {
   showLoadedToast();
 } else {
   window.addEventListener('DOMContentLoaded', showLoadedToast);
+}
+
+function replaceModeratorIcons() {
+  document.querySelectorAll('img').forEach(img => {
+    if (img.dataset.poopInjected) return;
+    
+    const src = img.getAttribute('src') || '';
+    const srcset = img.getAttribute('srcset') || '';
+    
+    if (src.includes('mod-super') || src.includes('mod-normal') || 
+        srcset.includes('mod-super') || srcset.includes('mod-normal')) {
+      img.dataset.poopInjected = 'true';
+      
+      const poopSvg = `data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext x='50%25' y='50%25' dominant-baseline='central' text-anchor='middle' font-size='80'%3E💩%3C/text%3E%3C/svg%3E`;
+      
+      img.setAttribute('src', poopSvg);
+      if (img.hasAttribute('srcset')) {
+        img.setAttribute('srcset', poopSvg);
+      }
+      
+      // Sometimes image wrappers have background images for blur-up effects.
+      img.style.backgroundImage = 'none';
+    }
+  });
 }
 
 let lastHref = location.href;
