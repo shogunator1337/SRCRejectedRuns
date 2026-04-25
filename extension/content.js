@@ -35,9 +35,26 @@ function tryInjectReactFilter() {
   
   for (let i = 0; i < labels.length; i++) {
     const el = labels[i];
-    if (el.childElementCount === 0) {
-      const txt = el.textContent.trim().toLowerCase();
-      if (txt === 'obsolete runs' || txt === 'obsolete' || txt === 'emulator runs' || txt === 'emulator') {
+    const txt = el.textContent.trim().toLowerCase();
+    
+    // Some logic matches text exactly, some handles slight variations
+    const isExactMatch = (txt === 'obsolete runs' || txt === 'obsolete' || 
+        txt === 'emulator runs' || txt === 'emulator' ||
+        txt === 'устаревшие раны' || txt === 'устаревшие' || 
+        txt === 'эмулятор' || txt === 'раны с эмулятора' || txt === 'раны на эмуляторе' ||
+        txt === 'carreras obsoletas' || txt === 'obsoleto' ||
+        txt === 'carreras en emulador' || txt === 'emulador' ||
+        txt === 'les runs obsolètes' || txt === 'obsolète' ||
+        txt === 'les runs sur émulateur' || txt === 'émulateur' || txt === 'emulateur');
+        
+    const isPartialMatch = !isExactMatch && (
+        txt.includes('obsolete runs') || txt.includes('emulator runs') || txt.includes('устаревшие раны') || 
+        txt.includes('carreras obsoletas') || txt.includes('les runs obsolètes')
+    );
+
+    if (isExactMatch || (isPartialMatch && txt.length < 30)) {
+      // if it has too many children, it might be a whole container, we want the deepest
+      if (el.childElementCount <= 2) {
         templateFilter = el;
         break;
       }
@@ -47,14 +64,26 @@ function tryInjectReactFilter() {
   if (templateFilter) {
     let container = templateFilter;
     while (container && container.tagName !== 'BODY') {
+      const isFilterContainer = container.tagName === 'DIV' && Array.from(container.children).some(child => child.tagName === 'LABEL' || child.querySelector('label'));
+      const hasTitleElement = !!container.querySelector('div, span, p, h2, h3, label'); // ensure it has *something* that looks like a title
+
       const buttons = container.querySelectorAll('button');
-      if (buttons.length >= 2) {
+      if (buttons.length >= 2 || (isFilterContainer && hasTitleElement)) {
         break;
       }
       container = container.parentElement;
     }
     
-    if (container && container.tagName !== 'BODY' && container.querySelectorAll('button').length >= 2) {
+    // Fallback if we couldn't find a button container, just use the label's parent
+    if (container && container.tagName === 'BODY') {
+       container = templateFilter.parentElement;
+       // find closest div wrapper
+       while(container && container.tagName !== 'DIV' && container.tagName !== 'BODY') {
+           container = container.parentElement;
+       }
+    }
+
+    if (container && container.tagName !== 'BODY') {
       injectFilterViaClone(container);
     }
   }
@@ -67,13 +96,35 @@ function injectFilterViaClone(templateNode) {
   clone.id = 'sr-rr-filter-container';
   
   // Меняем текст
-  const labels = clone.querySelectorAll('label, span, div, p');
+  const labels = clone.querySelectorAll('label, span, div, p, h2, h3');
   let labelFound = false;
   labels.forEach(el => {
-    if (!labelFound && el.childElementCount === 0) {
+    if (!labelFound && el.childElementCount <= 2) {
       const txt = el.textContent.trim().toLowerCase();
-      if (txt.includes('obsolete') || txt.includes('emulator') || txt.includes('runs') || txt.includes('platform')) {
-        el.textContent = 'Rejected runs';
+      if (txt === 'obsolete runs' || txt === 'obsolete' || 
+          txt === 'emulator runs' || txt === 'emulator' ||
+          txt === 'устаревшие раны' || txt === 'устаревшие' || 
+          txt === 'эмулятор' || txt === 'раны с эмулятора' || txt === 'раны на эмуляторе' ||
+          txt === 'carreras obsoletas' || txt === 'obsoleto' ||
+          txt === 'carreras en emulador' || txt === 'emulador' ||
+          txt === 'les runs obsolètes' || txt === 'obsolète' ||
+          txt === 'les runs sur émulateur' || txt === 'émulateur' || txt === 'emulateur' ||
+          txt.includes('obsolete') || txt.includes('emulator') || txt.includes('runs') || txt.includes('platform') || 
+          txt.includes('устаревшие') || txt.includes('эмулятор') || txt.includes('раны') || txt.includes('платформа') ||
+          txt.includes('obsoleto') || txt.includes('emulador') || txt.includes('carrera') ||
+          txt.includes('obsolète') || txt.includes('émulateur') || txt.includes('emulateur')) {
+        
+        if (el.childElementCount > 0) {
+           // We might need to replace just the text node directly if it has children like SVG
+           Array.from(el.childNodes).forEach(node => {
+               if (node.nodeType === Node.TEXT_NODE && node.textContent.trim().length > 0) {
+                   node.textContent = 'Rejected runs';
+               }
+           });
+        } else {
+           el.textContent = 'Rejected runs';
+        }
+        
         labelFound = true;
       }
     }
@@ -86,7 +137,13 @@ function injectFilterViaClone(templateNode) {
     svg.setAttribute('viewBox', '0 0 20 20');
   }
 
-  const originalButtons = Array.from(templateNode.querySelectorAll('button'));
+  let originalButtons = Array.from(templateNode.querySelectorAll('button'));
+  if (originalButtons.length === 0) {
+      const fallbackBtn = document.createElement('button');
+      fallbackBtn.className = "flex items-center justify-center rounded-sm px-2 py-1 text-sm font-medium transition-colors hover:bg-neutral-800 focus:outline-none dark:hover:bg-neutral-700 bg-neutral-900 text-white dark:bg-white dark:text-black";
+      originalButtons = [fallbackBtn, fallbackBtn];
+  }
+  
   let selectedBtnClass = '';
   let unselectedBtnClass = '';
   
@@ -103,8 +160,14 @@ function injectFilterViaClone(templateNode) {
   if (!selectedBtnClass && originalButtons.length > 0) selectedBtnClass = originalButtons[1]?.className || originalButtons[0].className;
   if (!unselectedBtnClass && originalButtons.length > 0) unselectedBtnClass = originalButtons[0].className;
 
-  const btnContainer = clone.querySelector('button').parentElement;
-  btnContainer.innerHTML = ''; 
+  let btnContainer = clone.querySelector('button')?.parentElement;
+  if (!btnContainer) {
+      btnContainer = document.createElement('div');
+      btnContainer.className = 'flex gap-2 w-full justify-start mt-2';
+      clone.appendChild(btnContainer);
+  } else {
+      btnContainer.innerHTML = ''; 
+  }
 
   const options = ['Hidden', 'Shown', 'Exclusive'];
   options.forEach(opt => {
@@ -128,15 +191,19 @@ function injectFilterViaClone(templateNode) {
        });
        btnContainer.appendChild(newBtn);
   });
-
+    
   const statusSpan = document.createElement('div');
   statusSpan.id = 'sr-rr-status';
   statusSpan.style.cssText = 'font-size: 12px; color: #a1a1aa; margin-top: 6px; padding-left: 2px;';
   
-  const flexCol = clone.querySelector('div') || clone; 
+  const flexCol = clone.tagName === 'DIV' ? clone : (clone.querySelector('div') || clone); 
   flexCol.appendChild(statusSpan);
 
-  templateNode.parentElement.appendChild(clone);
+  if (templateNode.nextSibling) {
+      templateNode.parentElement.insertBefore(clone, templateNode.nextSibling);
+  } else {
+      templateNode.parentElement.appendChild(clone);
+  }
 }
 
 async function applyFilterMode() {
@@ -203,7 +270,11 @@ function timeToSeconds(timeStr) {
   return isNaN(parsed) ? 99999999 : parsed;
 }
 
+let isFetchingRuns = false;
 async function fetchAndInjectRuns(tableElement) {
+  if (isFetchingRuns) return;
+  isFetchingRuns = true;
+
   function updateStatus(text, color = null) {
     const span = document.getElementById('sr-rr-status');
     if (span) {
@@ -217,6 +288,13 @@ async function fetchAndInjectRuns(tableElement) {
   try {
     const url = new URL(window.location.href);
     const pathParts = url.pathname.split('/').filter(p => p);
+    
+    // Check if the first part is a locale like 'ru-RU' or 'en-GB'
+    const localeRegex = /^[a-z]{2}(-[a-z]{2})?$/i;
+    if (pathParts[0] && localeRegex.test(pathParts[0])) {
+      pathParts.shift();
+    }
+    
     let gameAbbreviation = pathParts[0] || 'morrowind';
     if (gameAbbreviation === 'games' && pathParts[1]) {
       gameAbbreviation = pathParts[1];
@@ -291,12 +369,23 @@ async function fetchAndInjectRuns(tableElement) {
       }
     }
 
-    // 2. Fetch Rejected Runs
-    const runsRes = await fetch(`https://www.speedrun.com/api/v1/runs?status=rejected&game=${gameId}${categoryQuery}${varsQuery}&max=200&embed=players,platform,category`);
-    const runsData = await runsRes.json();
+    // 2. Fetch Rejected Runs (we fetch up to 5 pages since SR API ignores vars for rejected runs)
+    updateStatus('(Ищем раны...)', '#aaa');
+    const pagesToFetch = [0, 200, 400, 600, 800];
+    const fetchPromises = pagesToFetch.map(async offset => {
+        try {
+            const res = await fetch(`https://www.speedrun.com/api/v1/runs?status=rejected&game=${gameId}${categoryQuery}${varsQuery}&max=200&offset=${offset}&embed=players,platform,category`);
+            const data = await res.json();
+            return data.data || [];
+        } catch(e) { return []; }
+    });
+    
+    const results = await Promise.all(fetchPromises);
+    const allFetchedRuns = [];
+    results.forEach(batch => allFetchedRuns.push(...batch));
 
     // 3. Строгая локальная фильтрация (API иногда игнорирует параметры или выдает дефолтные)
-    let runs = (runsData.data || []).filter(r => {
+    let runs = allFetchedRuns.filter(r => {
       if (targetCategory) {
         const rCat = r.category?.data?.id || r.category;
         if (rCat && rCat !== targetCategory) return false;
@@ -311,6 +400,8 @@ async function fetchAndInjectRuns(tableElement) {
       return true;
     });
 
+    runs = Array.from(new Map(runs.map(run => [run.id, run])).values());
+
     if (runs.length === 0) {
       updateStatus('(Отклоненных ранов нет)');
       return;
@@ -320,6 +411,9 @@ async function fetchAndInjectRuns(tableElement) {
     updateStatus(`(Встроено: ${runs.length})`);
 
     const tbody = tableElement.querySelector('tbody') || tableElement;
+    
+    // Удаляем старые встроенные строки, если они почему-то остались
+    tbody.querySelectorAll('.sr-rr-inline-row').forEach(row => row.remove());
     
     // 3. Получаем заголовки только из ПЕРВОЙ строки THEAD, чтобы избежать дублирования из-за sticky headers
     const firstHeaderRow = tableElement.querySelector('thead tr');
@@ -591,6 +685,8 @@ async function fetchAndInjectRuns(tableElement) {
   } catch (error) {
     console.error(error);
     updateStatus('(Ошибка загрузки API)');
+  } finally {
+    isFetchingRuns = false;
   }
 }
 
@@ -631,24 +727,41 @@ if (document.body) {
 
 function replaceModeratorIcons() {
   document.querySelectorAll('img').forEach(img => {
-    if (img.dataset.poopInjected) return;
-    
     const src = img.getAttribute('src') || '';
     const srcset = img.getAttribute('srcset') || '';
     
     if (src.includes('mod-super') || src.includes('mod-normal') || 
         srcset.includes('mod-super') || srcset.includes('mod-normal')) {
-      img.dataset.poopInjected = 'true';
-      
-      const poopSvg = `data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext x='50%25' y='50%25' dominant-baseline='central' text-anchor='middle' font-size='80'%3E💩%3C/text%3E%3C/svg%3E`;
-      
-      img.setAttribute('src', poopSvg);
-      if (img.hasAttribute('srcset')) {
-        img.setAttribute('srcset', poopSvg);
+        
+      if (img.nextSibling && img.nextSibling.dataset && img.nextSibling.dataset.isPoopIcon) {
+        return; // Already injected and present
       }
       
-      // Sometimes image wrappers have background images for blur-up effects.
-      img.style.backgroundImage = 'none';
+      img.dataset.poopInjected = 'true';
+      
+      img.style.setProperty('display', 'none', 'important');
+      img.style.setProperty('visibility', 'hidden', 'important');
+      img.style.setProperty('opacity', '0', 'important');
+      img.style.setProperty('width', '0', 'important');
+      img.style.setProperty('height', '0', 'important');
+      
+      const span = document.createElement('span');
+      span.textContent = '💩';
+      span.dataset.isPoopIcon = 'true';
+      span.title = img.title || img.alt || '';
+      span.className = img.className || '';
+      span.style.cssText = img.style.cssText;
+      span.style.fontSize = '16px';
+      span.style.display = 'inline-flex';
+      span.style.alignItems = 'center';
+      span.style.justifyContent = 'center';
+      span.style.lineHeight = '1';
+      span.style.verticalAlign = 'middle';
+      span.style.width = '16px';
+      span.style.height = '16px';
+      span.style.margin = '0 2px';
+      
+      img.parentNode.insertBefore(span, img.nextSibling);
     }
   });
 }
