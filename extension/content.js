@@ -1,4 +1,5 @@
 let rejectedFilterMode = 'hidden'; // 'hidden', 'shown', 'exclusive'
+let pendingFilterMode = 'hidden';
 let runsInjected = false;
 let rejectedDataCache = [];
 
@@ -16,7 +17,7 @@ function initObserver() {
     if (table && table.querySelectorAll('th').length > 0) {
       if (!table.dataset.rrObserved) {
         table.dataset.rrObserved = "true";
-        if (rejectedFilterMode !== 'hidden') {
+        if (rejectedFilterMode !== 'hidden' || pendingFilterMode !== 'hidden') {
           // Если фильтр включен, а таблица только появилась/обновилась - применяем
           applyFilterMode();
         }
@@ -140,114 +141,129 @@ function tryInjectReactFilter() {
 function injectFilterViaClone(templateNode) {
   if (document.getElementById('sr-rr-filter-container')) return;
   
-  const clone = templateNode.cloneNode(true);
-  clone.id = 'sr-rr-filter-container';
-  
-  // Меняем текст
-  const replaceText = (node) => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      if (node.textContent && node.textContent.trim().length > 0) {
-        const txt = node.textContent.trim().toLowerCase();
-        if (txt === 'obsolete runs' || txt === 'obsolete' || 
-            txt === 'emulator runs' || txt === 'emulator' ||
-            txt === 'устаревшие раны' || txt === 'устаревшие' || 
-            txt === 'эмулятор' || txt === 'раны с эмулятора' || txt === 'раны на эмуляторе' ||
-            txt === 'carreras obsoletas' || txt === 'obsoleto' ||
-            txt === 'carreras en emulador' || txt === 'emulador' ||
-            txt === 'les runs obsolètes' || txt === 'obsolète' ||
-            txt === 'les runs sur émulateur' || txt === 'émulateur' || txt === 'emulateur' ||
-            txt.includes('obsolete') || txt.includes('emulator') || txt.includes('runs') || txt.includes('platform') || 
-            txt.includes('устаревшие') || txt.includes('эмулятор') || txt.includes('раны') || txt.includes('платформа') ||
-            txt.includes('obsoleto') || txt.includes('emulador') || txt.includes('carrera') ||
-            txt.includes('obsolète') || txt.includes('émulateur') || txt.includes('emulateur')) {
-          
-          node.textContent = 'Rejected runs';
-        }
-      }
-    } else {
-      Array.from(node.childNodes).forEach(child => {
-        if (child.tagName !== 'SVG' && child.tagName !== 'BUTTON') {
-          replaceText(child);
-        }
-      });
-    }
-  };
-  
-  replaceText(clone);
-  
-  // Меняем иконку (SVG X)
-  const svg = clone.querySelector('svg');
-  if (svg) {
-    svg.innerHTML = '<path fill-rule="evenodd" clip-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" fill="currentColor"/>';
-    svg.setAttribute('viewBox', '0 0 20 20');
-  }
+  const masterContainer = document.createElement('div');
+  masterContainer.id = 'sr-rr-filter-container';
+  masterContainer.style.display = 'flex';
+  masterContainer.style.flexDirection = 'column';
+  masterContainer.style.gap = '16px';
+  masterContainer.style.marginTop = '1rem';
+  masterContainer.style.marginBottom = '1rem';
 
-  let originalButtons = Array.from(templateNode.querySelectorAll('button'));
-  if (originalButtons.length === 0) {
-      const fallbackBtn = document.createElement('button');
-      fallbackBtn.className = "flex items-center justify-center rounded-sm px-2 py-1 text-sm font-medium transition-colors hover:bg-neutral-800 focus:outline-none dark:hover:bg-neutral-700 bg-neutral-900 text-white dark:bg-white dark:text-black";
-      originalButtons = [fallbackBtn, fallbackBtn];
-  }
-  
-  let selectedBtnClass = '';
-  let unselectedBtnClass = '';
-  
-  for (let b of originalButtons) {
-     const bg = window.getComputedStyle(b).getPropertyValue('background-color');
-     const isTransparent = bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent' || bg.replace(/\s+/g,'') === 'rgba(0,0,0,0)';
-     if (!isTransparent) {
-         selectedBtnClass = b.className;
-     } else {
-         unselectedBtnClass = b.className;
-     }
-  }
-  
-  if (!selectedBtnClass && originalButtons.length > 0) selectedBtnClass = originalButtons[1]?.className || originalButtons[0].className;
-  if (!unselectedBtnClass && originalButtons.length > 0) unselectedBtnClass = originalButtons[0].className;
-
-  let btnContainer = clone.querySelector('button')?.parentElement;
-  if (!btnContainer) {
-      btnContainer = document.createElement('div');
-      btnContainer.className = 'flex gap-2 w-full justify-start mt-2';
-      clone.appendChild(btnContainer);
-  } else {
-      btnContainer.innerHTML = ''; 
-  }
-
-  const options = ['Hidden', 'Shown', 'Exclusive'];
-  options.forEach(opt => {
-       const btnMode = opt.toLowerCase();
-       const isSelected = (rejectedFilterMode === btnMode);
-       
-       const newBtn = originalButtons[0].cloneNode(true);
-       newBtn.className = isSelected ? selectedBtnClass : unselectedBtnClass;
-       newBtn.textContent = opt;
-       
-       newBtn.addEventListener('click', async (e) => {
-           e.preventDefault();
-           rejectedFilterMode = btnMode;
-           
-           Array.from(btnContainer.querySelectorAll('button')).forEach(b => {
-               const isBtnSelected = (b.textContent.toLowerCase() === btnMode);
-               b.className = isBtnSelected ? selectedBtnClass : unselectedBtnClass;
-           });
-           
-           applyFilterMode();
-       });
-       btnContainer.appendChild(newBtn);
-  });
+  const createCloneBlock = (title, iconSvg, modeGetter, modeSetter) => {
+    const clone = templateNode.cloneNode(true);
+    clone.style.margin = '0';
     
-  const statusSpan = document.createElement('div');
-  statusSpan.id = 'sr-rr-status';
-  statusSpan.style.cssText = 'font-size: 12px; color: #a1a1aa; margin-top: 6px; padding-left: 2px;';
-  
-  const flexCol = clone.tagName === 'DIV' ? clone : (clone.querySelector('div') || clone); 
-  flexCol.appendChild(statusSpan);
+    const replaceText = (node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        if (node.textContent && node.textContent.trim().length > 0) {
+          const txt = node.textContent.trim().toLowerCase();
+          if (txt === 'obsolete runs' || txt === 'obsolete' || 
+              txt === 'emulator runs' || txt === 'emulator' ||
+              txt === 'устаревшие раны' || txt === 'устаревшие' || 
+              txt === 'эмулятор' || txt === 'раны с эмулятора' || txt === 'раны на эмуляторе' ||
+              txt === 'carreras obsoletas' || txt === 'obsoleto' ||
+              txt === 'carreras en emulador' || txt === 'emulador' ||
+              txt === 'les runs obsolètes' || txt === 'obsolète' ||
+              txt === 'les runs sur émulateur' || txt === 'émulateur' || txt === 'emulateur' ||
+              txt.includes('obsolete') || txt.includes('emulator') || txt.includes('runs') || txt.includes('platform') || 
+              txt.includes('устаревшие') || txt.includes('эмулятор') || txt.includes('раны') || txt.includes('платформа') ||
+              txt.includes('obsoleto') || txt.includes('emulador') || txt.includes('carrera') ||
+              txt.includes('obsolète') || txt.includes('émulateur') || txt.includes('emulateur')) {
+            node.textContent = title;
+          }
+        }
+      } else {
+        Array.from(node.childNodes).forEach(child => {
+          if (child.tagName !== 'SVG' && child.tagName !== 'BUTTON') {
+            replaceText(child);
+          }
+        });
+      }
+    };
+    
+    replaceText(clone);
+    
+    const svg = clone.querySelector('svg');
+    if (svg && iconSvg) {
+      svg.innerHTML = iconSvg;
+      svg.setAttribute('viewBox', '0 0 20 20');
+    }
+
+    let originalButtons = Array.from(templateNode.querySelectorAll('button'));
+    if (originalButtons.length === 0) {
+        const fallbackBtn = document.createElement('button');
+        fallbackBtn.className = "flex items-center justify-center rounded-sm px-2 py-1 text-sm font-medium transition-colors hover:bg-neutral-800 focus:outline-none dark:hover:bg-neutral-700 bg-neutral-900 text-white dark:bg-white dark:text-black";
+        originalButtons = [fallbackBtn, fallbackBtn];
+    }
+    
+    let selectedBtnClass = '';
+    let unselectedBtnClass = '';
+    
+    for (let b of originalButtons) {
+       const bg = window.getComputedStyle(b).getPropertyValue('background-color');
+       const isTransparent = bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent' || bg.replace(/\s+/g,'') === 'rgba(0,0,0,0)';
+       if (!isTransparent) {
+           selectedBtnClass = b.className;
+       } else {
+           unselectedBtnClass = b.className;
+       }
+    }
+    
+    if (!selectedBtnClass && originalButtons.length > 0) selectedBtnClass = originalButtons[1]?.className || originalButtons[0].className;
+    if (!unselectedBtnClass && originalButtons.length > 0) unselectedBtnClass = originalButtons[0].className;
+
+    let btnContainer = clone.querySelector('button')?.parentElement;
+    if (!btnContainer) {
+        btnContainer = document.createElement('div');
+        btnContainer.className = 'flex gap-2 w-full justify-start mt-2';
+        clone.appendChild(btnContainer);
+    } else {
+        btnContainer.innerHTML = ''; 
+    }
+
+    const options = ['Hidden', 'Shown', 'Exclusive'];
+    options.forEach(opt => {
+         const btnMode = opt.toLowerCase();
+         const isSelected = (modeGetter() === btnMode);
+         
+         const newBtn = originalButtons[0].cloneNode(true);
+         newBtn.className = isSelected ? selectedBtnClass : unselectedBtnClass;
+         newBtn.textContent = opt;
+         
+         newBtn.addEventListener('click', async (e) => {
+             e.preventDefault();
+             modeSetter(btnMode);
+             
+             Array.from(btnContainer.querySelectorAll('button')).forEach(b => {
+                 const isBtnSelected = (b.textContent.toLowerCase() === btnMode);
+                 b.className = isBtnSelected ? selectedBtnClass : unselectedBtnClass;
+             });
+             
+             applyFilterMode();
+         });
+         btnContainer.appendChild(newBtn);
+    });
+      
+    const statusSpan = document.createElement('div');
+    statusSpan.id = title === 'Rejected runs' ? 'sr-rr-status' : 'sr-pr-status';
+    statusSpan.style.cssText = 'font-size: 12px; color: #a1a1aa; margin-top: 6px; padding-left: 2px;';
+    
+    const flexCol = clone.tagName === 'DIV' ? clone : (clone.querySelector('div') || clone); 
+    flexCol.appendChild(statusSpan);
+
+    return clone;
+  };
+
+  const rejectedClone = createCloneBlock('Rejected runs', '<path fill-rule="evenodd" clip-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" fill="currentColor"/>', () => rejectedFilterMode, (v) => rejectedFilterMode = v);
+  const pendingClone = createCloneBlock('Waiting for approve', '<path fill-rule="evenodd" clip-rule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" fill="currentColor"/>', () => pendingFilterMode, (v) => pendingFilterMode = v);
+
+  masterContainer.appendChild(rejectedClone);
+  masterContainer.appendChild(pendingClone);
 
   if (templateNode.nextSibling) {
-      templateNode.parentElement.insertBefore(clone, templateNode.nextSibling);
+      templateNode.parentElement.insertBefore(masterContainer, templateNode.nextSibling);
   } else {
-      templateNode.parentElement.appendChild(clone);
+      templateNode.parentElement.appendChild(masterContainer);
   }
 }
 
@@ -258,7 +274,7 @@ async function applyFilterMode() {
   const originalRows = document.querySelectorAll('tr:not(.sr-rr-inline-row):not(.empty-state)');
   const theads = document.querySelectorAll('thead tr');
 
-  if (rejectedFilterMode === 'hidden') {
+  if (rejectedFilterMode === 'hidden' && pendingFilterMode === 'hidden') {
     document.querySelectorAll('.sr-rr-inline-row').forEach(row => row.style.display = 'none');
     originalRows.forEach(row => row.style.display = '');
     return;
@@ -268,11 +284,18 @@ async function applyFilterMode() {
     await fetchAndInjectRuns(table);
   }
 
-  if (rejectedFilterMode === 'shown') {
-    document.querySelectorAll('.sr-rr-inline-row').forEach(row => row.style.display = '');
-    originalRows.forEach(row => row.style.display = '');
-  } else if (rejectedFilterMode === 'exclusive') {
-    document.querySelectorAll('.sr-rr-inline-row').forEach(row => row.style.display = '');
+  document.querySelectorAll('.sr-rr-inline-row').forEach(row => {
+     const status = row.dataset.runStatus; 
+     const mode = status === 'new' ? pendingFilterMode : rejectedFilterMode;
+     
+     if (mode === 'hidden') {
+         row.style.display = 'none';
+     } else {
+         row.style.display = '';
+     }
+  });
+
+  if (rejectedFilterMode === 'exclusive' || pendingFilterMode === 'exclusive') {
     originalRows.forEach(row => {
       // Прячем оригинальные раны, но не прячем заголовки!
       if (!row.closest('thead')) {
@@ -280,6 +303,12 @@ async function applyFilterMode() {
       }
     });
     theads.forEach(r => r.style.display = '');
+  } else {
+    originalRows.forEach(row => {
+      if (!row.closest('thead')) {
+         row.style.display = '';
+      }
+    });
   }
 }
 
@@ -320,15 +349,16 @@ async function fetchAndInjectRuns(tableElement) {
   if (isFetchingRuns) return;
   isFetchingRuns = true;
 
-  function updateStatus(text, color = null) {
-    const span = document.getElementById('sr-rr-status');
+  function updateStatus(spanId, text, color = null) {
+    const span = document.getElementById(spanId);
     if (span) {
       span.textContent = text;
       if (color) span.style.color = color;
     }
   }
 
-  updateStatus('(Загрузка API...)', '#aaa');
+  updateStatus('sr-rr-status', '(Загрузка API...)', '#aaa');
+  updateStatus('sr-pr-status', '(Загрузка API...)', '#aaa');
 
   try {
     const url = new URL(window.location.href);
@@ -350,12 +380,14 @@ async function fetchAndInjectRuns(tableElement) {
     const gameData = await gameRes.json();
     
     if (!gameData.data || gameData.data.length === 0) {
-      updateStatus('(Игра не найдена)');
+      updateStatus('sr-rr-status', '(Игра не найдена)');
+      updateStatus('sr-pr-status', '(Игра не найдена)');
       return;
     }
     const gameId = gameData.data[0].id;
 
     let targetCategory = null;
+    let targetLevel = null;
     let targetVars = {};
     
     // Пытаемся найти эталонный ран в видимой таблице (гарантирует получение всех дефолтных переменных)
@@ -368,6 +400,7 @@ async function fetchAndInjectRuns(tableElement) {
           const refData = await refRes.json();
           if (refData?.data) {
             targetCategory = refData.data.category;
+            targetLevel = refData.data.level;
             targetVars = refData.data.values || {};
           }
         } catch(e) { console.warn(e); }
@@ -378,10 +411,22 @@ async function fetchAndInjectRuns(tableElement) {
     const xParam = url.searchParams.get('x');
     if (!targetCategory && xParam) {
       const parts = xParam.split('-');
-      if (parts.length > 0 && parts[0]) targetCategory = parts[0];
-      for (let i = 1; i < parts.length; i++) {
-        const vParts = parts[i].split('.');
-        if (vParts.length === 2) targetVars[vParts[0]] = vParts[1];
+      let startIndex = 1;
+      if (parts.length > 0 && parts[0]) {
+        if (parts[0].startsWith('l_')) {
+          targetLevel = parts[0].substring(2);
+          if (parts.length > 1) {
+            targetCategory = parts[1];
+          }
+          startIndex = 2;
+        } else {
+          targetCategory = parts[0];
+          startIndex = 1;
+        }
+        for (let i = startIndex; i < parts.length; i++) {
+          const vParts = parts[i].split('.');
+          if (vParts.length === 2) targetVars[vParts[0]] = vParts[1];
+        }
       }
     }
 
@@ -404,6 +449,7 @@ async function fetchAndInjectRuns(tableElement) {
     }
 
     let categoryQuery = targetCategory ? `&category=${targetCategory}` : '';
+    let levelQuery = targetLevel ? `&level=${targetLevel}` : '';
     let varsQuery = '';
     const strictVars = {};
 
@@ -414,14 +460,19 @@ async function fetchAndInjectRuns(tableElement) {
       }
     }
 
-    // 2. Fetch Rejected Runs (we fetch up to 5 pages since SR API ignores vars for rejected runs)
-    updateStatus('(Ищем раны...)', '#aaa');
+    // 2. Fetch Rejected & Pending Runs
+    updateStatus('sr-rr-status', '(Ищем раны...)', '#aaa');
+    updateStatus('sr-pr-status', '(Ищем раны...)', '#aaa');
     const pagesToFetch = [0, 200, 400, 600, 800];
     const fetchPromises = pagesToFetch.map(async offset => {
         try {
-            const res = await fetch(`https://www.speedrun.com/api/v1/runs?status=rejected&game=${gameId}${categoryQuery}${varsQuery}&max=200&offset=${offset}&embed=players,platform,category`);
-            const data = await res.json();
-            return data.data || [];
+            const resRej = fetch(`https://www.speedrun.com/api/v1/runs?status=rejected&game=${gameId}${levelQuery}${categoryQuery}${varsQuery}&max=200&offset=${offset}&embed=players,platform,category`);
+            const resNew = fetch(`https://www.speedrun.com/api/v1/runs?status=new&game=${gameId}${levelQuery}${categoryQuery}${varsQuery}&max=200&offset=${offset}&embed=players,platform,category`);
+            const [dataRej, dataNew] = await Promise.all([
+                resRej.then(r => r.json()).catch(() => ({data: []})),
+                resNew.then(r => r.json()).catch(() => ({data: []}))
+            ]);
+            return [...(dataRej.data || []), ...(dataNew.data || [])];
         } catch(e) { return []; }
     });
     
@@ -431,6 +482,10 @@ async function fetchAndInjectRuns(tableElement) {
 
     // 3. Строгая локальная фильтрация (API иногда игнорирует параметры или выдает дефолтные)
     let runs = allFetchedRuns.filter(r => {
+      if (targetLevel) {
+        const rLev = r.level?.data?.id || r.level;
+        if (rLev && rLev !== targetLevel) return false;
+      }
       if (targetCategory) {
         const rCat = r.category?.data?.id || r.category;
         if (rCat && rCat !== targetCategory) return false;
@@ -448,12 +503,16 @@ async function fetchAndInjectRuns(tableElement) {
     runs = Array.from(new Map(runs.map(run => [run.id, run])).values());
 
     if (runs.length === 0) {
-      updateStatus('(Отклоненных ранов нет)');
+      updateStatus('sr-rr-status', '(Отклоненных ранов нет)');
+      updateStatus('sr-pr-status', '(Ожидающих ранов нет)');
       return;
     }
 
     rejectedDataCache = runs;
-    updateStatus(`(Встроено: ${runs.length})`);
+    const numRej = runs.filter(r => r.status.status === 'rejected').length;
+    const numNew = runs.filter(r => r.status.status === 'new').length;
+    updateStatus('sr-rr-status', `(Встроено: ${numRej})`);
+    updateStatus('sr-pr-status', `(Встроено: ${numNew})`);
 
     const tbody = tableElement.querySelector('tbody') || tableElement;
     
@@ -474,18 +533,31 @@ async function fetchAndInjectRuns(tableElement) {
     runs.forEach(run => {
       const tr = document.createElement('tr');
       tr.className = 'sr-rr-inline-row';
-      tr.style.backgroundColor = 'rgba(255, 50, 50, 0.1)';
+      const isPending = run.status.status === 'new';
+      tr.dataset.runStatus = isPending ? 'new' : 'rejected';
+      
+      const bgColor = isPending ? 'rgba(50, 150, 255, 0.1)' : 'rgba(255, 50, 50, 0.1)';
+      const hoverBgColor = isPending ? 'rgba(50, 150, 255, 0.2)' : 'rgba(255, 50, 50, 0.2)';
+      const textColor = isPending ? '#3296ff' : '#ff3333';
+      
+      tr.style.backgroundColor = bgColor;
       tr.style.cursor = 'pointer';
-      tr.title = 'Причина отказа: ' + (run.status.reason || 'Не указана');
+      
+      if (isPending) {
+        tr.title = 'Ожидает проверки';
+      } else {
+        tr.title = 'Причина отказа: ' + (run.status.reason || 'Не указана');
+      }
       tr.onclick = () => window.open(run.weblink, '_blank');
       
-      tr.onmouseenter = () => tr.style.backgroundColor = 'rgba(255, 50, 50, 0.2)';
-      tr.onmouseleave = () => tr.style.backgroundColor = 'rgba(255, 50, 50, 0.1)';
+      tr.onmouseenter = () => tr.style.backgroundColor = hoverBgColor;
+      tr.onmouseleave = () => tr.style.backgroundColor = bgColor;
 
       const timeT = run.times.primary_t || 0;
       tr.dataset.time_t = timeT;
 
-      const rankHTML = '<span style="background:#ff3333;color:white;padding:2px 4px;border-radius:4px;font-size:10px;font-weight:bold;">REJC</span>';
+      const badgeStr = isPending ? 'PEND' : 'REJC';
+      const rankHTML = `<span style="background:${textColor};color:white;padding:2px 4px;border-radius:4px;font-size:10px;font-weight:bold;">${badgeStr}</span>`;
       
       let playersHTMLList = [];
       if (run.players?.data) {
@@ -502,10 +574,10 @@ async function fetchAndInjectRuns(tableElement) {
            } else {
                name = p.name || 'Guest';
            }
-           playersHTMLList.push(`<span style="white-space:nowrap; display: inline-flex; align-items: center;">${flagHTML}<span style="color:#d44242; font-weight:bold;">${name}</span></span>`);
+           playersHTMLList.push(`<span style="white-space:nowrap; display: inline-flex; align-items: center;">${flagHTML}<span style="color:${textColor}; font-weight:bold;">${name}</span></span>`);
         });
       }
-      if (playersHTMLList.length === 0) playersHTMLList.push('<span style="color:#d44242;">Unknown</span>');
+      if (playersHTMLList.length === 0) playersHTMLList.push(`<span style="color:${textColor};">Unknown</span>`);
       
       const combinedPlayerHTML = `<div style="display: flex; flex-wrap: wrap; align-items: center; row-gap: 4px;">${playersHTMLList.join('<span style="margin: 0 6px;">·</span>')}</div>`;
 
