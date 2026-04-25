@@ -11,4 +11,4 @@ package*
 tsconfig*
 vite*
 README.md
-index.html
+*.html

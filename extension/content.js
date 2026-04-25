@@ -30,42 +30,92 @@ function initObserver() {
 function tryInjectReactFilter() {
   if (document.getElementById('sr-rr-filter-container')) return;
 
-  const labels = document.querySelectorAll('label, div, span, p, h2, h3');
+  // Find the filters modal/dialog 
+  // Speedrun.com uses a modal/dialog for filters. 
+  // We can locate it by looking for common dialog roles or a container with multiple buttons that is floating.
+  const dialogs = document.querySelectorAll('dialog, [role="dialog"], .modal, .tippy-box');
+  let openDialog = null;
+  
+  if (dialogs.length > 0) {
+    // get the last one or the visible one
+    for (let d of dialogs) {
+       if (d.getBoundingClientRect().width > 0) {
+           openDialog = d;
+       }
+    }
+  }
+
+  // If we can't find a standard dialog, look for a div that acts like the filters container.
+  // The user provided structure: /html/body/div[4]/div/div[2]/div[X]/div[2]/div 
+  // This means the filters are a list of rows. We can look for existing filter rows.
+  
+  let searchRoot = openDialog || document;
+  
+  const labels = searchRoot.querySelectorAll('label, div, span, p, h2, h3');
   let templateFilter = null;
   
   for (let i = 0; i < labels.length; i++) {
     const el = labels[i];
+    
+    // Ignore text inside the table itself (if we fallback to document search)
+    if (el.closest('table')) continue;
+
     const txt = el.textContent.trim().toLowerCase();
     
-    // Some logic matches text exactly, some handles slight variations
+    // Strict exact matches ONLY to avoid grabbing random text on the page!
     const isExactMatch = (txt === 'obsolete runs' || txt === 'obsolete' || 
         txt === 'emulator runs' || txt === 'emulator' ||
         txt === 'устаревшие раны' || txt === 'устаревшие' || 
-        txt === 'эмулятор' || txt === 'раны с эмулятора' || txt === 'раны на эмуляторе' ||
-        txt === 'carreras obsoletas' || txt === 'obsoleto' ||
-        txt === 'carreras en emulador' || txt === 'emulador' ||
-        txt === 'les runs obsolètes' || txt === 'obsolète' ||
-        txt === 'les runs sur émulateur' || txt === 'émulateur' || txt === 'emulateur');
-        
-    const isPartialMatch = !isExactMatch && (
-        txt.includes('obsolete runs') || txt.includes('emulator runs') || txt.includes('устаревшие раны') || 
-        txt.includes('carreras obsoletas') || txt.includes('les runs obsolètes')
-    );
+        txt === 'эмулятор' || txt === 'раны с эмулятора' || txt === 'carreras obsoletas' || 
+        txt === 'carreras en emulador' || txt === 'les runs obsolètes' || txt === 'les runs sur émulateur');
 
-    if (isExactMatch || (isPartialMatch && txt.length < 30)) {
-      // if it has too many children, it might be a whole container, we want the deepest
+    if (isExactMatch) {
       if (el.childElementCount <= 2) {
-        templateFilter = el;
-        break;
+        // Also verify it has buttons near it!
+        let parent = el.parentElement;
+        let foundButtons = false;
+        while(parent && parent.tagName !== 'BODY' && searchRoot.contains(parent)) {
+           if (parent.querySelectorAll('button').length >= 2) {
+               foundButtons = true;
+               break;
+           }
+           parent = parent.parentElement;
+        }
+        
+        if (foundButtons) {
+            templateFilter = el;
+            break;
+        }
       }
     }
+  }
+
+  // If we still can't find a template using exact text, but the dialog is open,
+  // we can use ANY typical filter row inside the dialog!
+  if (!templateFilter && openDialog) {
+     const anyButtons = openDialog.querySelectorAll('button');
+     for (let b of anyButtons) {
+        let parent = b.parentElement;
+        if (parent && parent.querySelectorAll('button').length >= 2) {
+           // this parent holds multiple buttons (like Hidden / Shown). Use its parent as template container!
+           let row = parent.parentElement;
+           if (row && row.textContent.trim().length > 0) {
+               // Let's use `row` directly if it looks like a filter item!
+               const header = row.querySelector('label, p, span, div');
+               if (header) {
+                   templateFilter = header;
+                   break;
+               }
+           }
+        }
+     }
   }
 
   if (templateFilter) {
     let container = templateFilter;
     while (container && container.tagName !== 'BODY') {
       const isFilterContainer = container.tagName === 'DIV' && Array.from(container.children).some(child => child.tagName === 'LABEL' || child.querySelector('label'));
-      const hasTitleElement = !!container.querySelector('div, span, p, h2, h3, label'); // ensure it has *something* that looks like a title
+      const hasTitleElement = !!container.querySelector('div, span, p, h2, h3, label'); 
 
       const buttons = container.querySelectorAll('button');
       if (buttons.length >= 2 || (isFilterContainer && hasTitleElement)) {
@@ -74,10 +124,8 @@ function tryInjectReactFilter() {
       container = container.parentElement;
     }
     
-    // Fallback if we couldn't find a button container, just use the label's parent
     if (container && container.tagName === 'BODY') {
        container = templateFilter.parentElement;
-       // find closest div wrapper
        while(container && container.tagName !== 'DIV' && container.tagName !== 'BODY') {
            container = container.parentElement;
        }
@@ -96,39 +144,36 @@ function injectFilterViaClone(templateNode) {
   clone.id = 'sr-rr-filter-container';
   
   // Меняем текст
-  const labels = clone.querySelectorAll('label, span, div, p, h2, h3');
-  let labelFound = false;
-  labels.forEach(el => {
-    if (!labelFound && el.childElementCount <= 2) {
-      const txt = el.textContent.trim().toLowerCase();
-      if (txt === 'obsolete runs' || txt === 'obsolete' || 
-          txt === 'emulator runs' || txt === 'emulator' ||
-          txt === 'устаревшие раны' || txt === 'устаревшие' || 
-          txt === 'эмулятор' || txt === 'раны с эмулятора' || txt === 'раны на эмуляторе' ||
-          txt === 'carreras obsoletas' || txt === 'obsoleto' ||
-          txt === 'carreras en emulador' || txt === 'emulador' ||
-          txt === 'les runs obsolètes' || txt === 'obsolète' ||
-          txt === 'les runs sur émulateur' || txt === 'émulateur' || txt === 'emulateur' ||
-          txt.includes('obsolete') || txt.includes('emulator') || txt.includes('runs') || txt.includes('platform') || 
-          txt.includes('устаревшие') || txt.includes('эмулятор') || txt.includes('раны') || txt.includes('платформа') ||
-          txt.includes('obsoleto') || txt.includes('emulador') || txt.includes('carrera') ||
-          txt.includes('obsolète') || txt.includes('émulateur') || txt.includes('emulateur')) {
-        
-        if (el.childElementCount > 0) {
-           // We might need to replace just the text node directly if it has children like SVG
-           Array.from(el.childNodes).forEach(node => {
-               if (node.nodeType === Node.TEXT_NODE && node.textContent.trim().length > 0) {
-                   node.textContent = 'Rejected runs';
-               }
-           });
-        } else {
-           el.textContent = 'Rejected runs';
+  const replaceText = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (node.textContent && node.textContent.trim().length > 0) {
+        const txt = node.textContent.trim().toLowerCase();
+        if (txt === 'obsolete runs' || txt === 'obsolete' || 
+            txt === 'emulator runs' || txt === 'emulator' ||
+            txt === 'устаревшие раны' || txt === 'устаревшие' || 
+            txt === 'эмулятор' || txt === 'раны с эмулятора' || txt === 'раны на эмуляторе' ||
+            txt === 'carreras obsoletas' || txt === 'obsoleto' ||
+            txt === 'carreras en emulador' || txt === 'emulador' ||
+            txt === 'les runs obsolètes' || txt === 'obsolète' ||
+            txt === 'les runs sur émulateur' || txt === 'émulateur' || txt === 'emulateur' ||
+            txt.includes('obsolete') || txt.includes('emulator') || txt.includes('runs') || txt.includes('platform') || 
+            txt.includes('устаревшие') || txt.includes('эмулятор') || txt.includes('раны') || txt.includes('платформа') ||
+            txt.includes('obsoleto') || txt.includes('emulador') || txt.includes('carrera') ||
+            txt.includes('obsolète') || txt.includes('émulateur') || txt.includes('emulateur')) {
+          
+          node.textContent = 'Rejected runs';
         }
-        
-        labelFound = true;
       }
+    } else {
+      Array.from(node.childNodes).forEach(child => {
+        if (child.tagName !== 'SVG' && child.tagName !== 'BUTTON') {
+          replaceText(child);
+        }
+      });
     }
-  });
+  };
+  
+  replaceText(clone);
   
   // Меняем иконку (SVG X)
   const svg = clone.querySelector('svg');
@@ -451,7 +496,8 @@ async function fetchAndInjectRuns(tableElement) {
                name = p.names?.international || p.names?.japanese || p.name || 'Unknown';
                const cc = p.location?.country?.code;
                if (cc) {
-                   flagHTML = `<img src="https://flagcdn.com/16x12/${cc.toLowerCase()}.png" srcset="https://flagcdn.com/32x24/${cc.toLowerCase()}.png 2x" alt="${cc}" style="display:inline-block; vertical-align:middle; margin-right:6px; box-shadow: 0 0 1px rgba(255,255,255,0.2);">`;
+                   const formattedCc = cc.replace(/\//g, '-').toLowerCase();
+                   flagHTML = `<img src="https://flagcdn.com/16x12/${formattedCc}.png" srcset="https://flagcdn.com/32x24/${formattedCc}.png 2x" alt="${cc}" style="display:inline-block; vertical-align:middle; margin-right:6px; box-shadow: 0 0 1px rgba(255,255,255,0.2);">`;
                }
            } else {
                name = p.name || 'Guest';
@@ -726,42 +772,18 @@ if (document.body) {
 }
 
 function replaceModeratorIcons() {
+  const poopUrl = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">💩</text></svg>';
+  
   document.querySelectorAll('img').forEach(img => {
     const src = img.getAttribute('src') || '';
-    const srcset = img.getAttribute('srcset') || '';
-    
-    if (src.includes('mod-super') || src.includes('mod-normal') || 
-        srcset.includes('mod-super') || srcset.includes('mod-normal')) {
-        
-      if (img.nextSibling && img.nextSibling.dataset && img.nextSibling.dataset.isPoopIcon) {
-        return; // Already injected and present
+    if (src.includes('moderator') || src.includes('super-moderator') || src.includes('mod-super') || src.includes('mod-normal')) {
+      if (img.src !== poopUrl) {
+        img.src = poopUrl;
+        img.removeAttribute('srcset');
+        if (!img.style.transform.includes('scale(1.5)')) {
+          img.style.transform = 'scale(1.5)';
+        }
       }
-      
-      img.dataset.poopInjected = 'true';
-      
-      img.style.setProperty('display', 'none', 'important');
-      img.style.setProperty('visibility', 'hidden', 'important');
-      img.style.setProperty('opacity', '0', 'important');
-      img.style.setProperty('width', '0', 'important');
-      img.style.setProperty('height', '0', 'important');
-      
-      const span = document.createElement('span');
-      span.textContent = '💩';
-      span.dataset.isPoopIcon = 'true';
-      span.title = img.title || img.alt || '';
-      span.className = img.className || '';
-      span.style.cssText = img.style.cssText;
-      span.style.fontSize = '16px';
-      span.style.display = 'inline-flex';
-      span.style.alignItems = 'center';
-      span.style.justifyContent = 'center';
-      span.style.lineHeight = '1';
-      span.style.verticalAlign = 'middle';
-      span.style.width = '16px';
-      span.style.height = '16px';
-      span.style.margin = '0 2px';
-      
-      img.parentNode.insertBefore(span, img.nextSibling);
     }
   });
 }
