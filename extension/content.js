@@ -2,6 +2,16 @@ let rejectedFilterMode = 'hidden'; // 'hidden', 'shown', 'exclusive'
 let pendingFilterMode = 'hidden';
 let runsInjected = false;
 let rejectedDataCache = [];
+let rrStatusMsg = '';
+let prStatusMsg = '';
+
+function updateStatus(id, text) {
+  if (id === 'sr-rr-status') rrStatusMsg = text;
+  if (id === 'sr-pr-status') prStatusMsg = text;
+  
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
 
 function initObserver() {
   const observer = new MutationObserver(() => {
@@ -11,17 +21,37 @@ function initObserver() {
     // 1.5. Заменяем иконки модераторов на эмодзи какашки
     replaceModeratorIcons();
 
-    // 2. Следим за наличием таблицы
-    const table = document.querySelector('table'); 
+    // 2. Следим за изменениями (URL или таблица)
+    const table = document.querySelector('table:not([data-rr-fake="true"])'); 
     
-    if (table && table.querySelectorAll('th').length > 0) {
-      if (!table.dataset.rrObserved) {
-        table.dataset.rrObserved = "true";
-        if (rejectedFilterMode !== 'hidden' || pendingFilterMode !== 'hidden') {
-          // Если фильтр включен, а таблица только появилась/обновилась - применяем
-          applyFilterMode();
-        }
+    const currentUrl = location.href;
+    let urlChanged = false;
+
+    if (document.body.dataset.rrLastUrl !== currentUrl) {
+      document.body.dataset.rrLastUrl = currentUrl;
+      urlChanged = true;
+      runsInjected = false;
+      // remove old fake table on url change
+      const fakeT = document.getElementById('sr-rr-fake-table-container');
+      if (fakeT) {
+          if (fakeT.dataset.rrEmptyStateHidden === 'true') {
+              const prev = fakeT.previousElementSibling;
+              if (prev) prev.style.display = '';
+          }
+          fakeT.remove();
       }
+    }
+
+    if (table) {
+      if (table.dataset.rrObservedUrl !== currentUrl) {
+        table.dataset.rrObservedUrl = currentUrl;
+        runsInjected = false;
+        urlChanged = true;
+      }
+    }
+
+    if (urlChanged) {
+      applyFilterMode();
     }
   });
 
@@ -31,14 +61,14 @@ function initObserver() {
 function tryInjectReactFilter() {
   if (document.getElementById('sr-rr-filter-container')) return;
 
-  // Find the filters modal/dialog 
-  // Speedrun.com uses a modal/dialog for filters. 
-  // We can locate it by looking for common dialog roles or a container with multiple buttons that is floating.
+  const path = location.pathname.toLowerCase();
+  const isExcludedPage = path.includes('/forums') || path.includes('/thread') || path.includes('/streams') || path.includes('/guides') || path.includes('/resources') || path.includes('/user') || path.includes('/news') || path.includes('/settings');
+  if (isExcludedPage) return;
+
   const dialogs = document.querySelectorAll('dialog, [role="dialog"], .modal, .tippy-box');
   let openDialog = null;
   
   if (dialogs.length > 0) {
-    // get the last one or the visible one
     for (let d of dialogs) {
        if (d.getBoundingClientRect().width > 0) {
            openDialog = d;
@@ -46,24 +76,30 @@ function tryInjectReactFilter() {
     }
   }
 
-  // If we can't find a standard dialog, look for a div that acts like the filters container.
-  // The user provided structure: /html/body/div[4]/div/div[2]/div[X]/div[2]/div 
-  // This means the filters are a list of rows. We can look for existing filter rows.
+  // Without a dialog, we don't inject.
+  if (!openDialog) return;
+
+  // Let's verify this is the Filters dialog by checking its title/headings
+  // Specifically look for "Filters" or "Фильтры" and NOT "Rules"
+  const headings = Array.from(openDialog.querySelectorAll('h2, h3, h1, header')).map(e => e.textContent.toLowerCase());
+  const isFilters = headings.some(txt => txt.includes('filters') || txt.includes('фильтры'));
+  const isRules = headings.some(txt => txt.includes('rules') || txt.includes('правила'));
   
-  let searchRoot = openDialog || document;
+  if (isRules && !isFilters) {
+      return; // "не надо никуда кроме filters встраивать настройки, в том числе в rules"
+  }
   
+  // Search for the template filter row to clone
+  let searchRoot = openDialog;
   const labels = searchRoot.querySelectorAll('label, div, span, p, h2, h3');
   let templateFilter = null;
   
   for (let i = 0; i < labels.length; i++) {
     const el = labels[i];
-    
-    // Ignore text inside the table itself (if we fallback to document search)
     if (el.closest('table')) continue;
 
     const txt = el.textContent.trim().toLowerCase();
     
-    // Strict exact matches ONLY to avoid grabbing random text on the page!
     const isExactMatch = (txt === 'obsolete runs' || txt === 'obsolete' || 
         txt === 'emulator runs' || txt === 'emulator' ||
         txt === 'устаревшие раны' || txt === 'устаревшие' || 
@@ -72,7 +108,6 @@ function tryInjectReactFilter() {
 
     if (isExactMatch) {
       if (el.childElementCount <= 2) {
-        // Also verify it has buttons near it!
         let parent = el.parentElement;
         let foundButtons = false;
         while(parent && parent.tagName !== 'BODY' && searchRoot.contains(parent)) {
@@ -91,17 +126,13 @@ function tryInjectReactFilter() {
     }
   }
 
-  // If we still can't find a template using exact text, but the dialog is open,
-  // we can use ANY typical filter row inside the dialog!
-  if (!templateFilter && openDialog) {
-     const anyButtons = openDialog.querySelectorAll('button');
+  if (!templateFilter) {
+     const anyButtons = searchRoot.querySelectorAll('button');
      for (let b of anyButtons) {
         let parent = b.parentElement;
         if (parent && parent.querySelectorAll('button').length >= 2) {
-           // this parent holds multiple buttons (like Hidden / Shown). Use its parent as template container!
            let row = parent.parentElement;
            if (row && row.textContent.trim().length > 0) {
-               // Let's use `row` directly if it looks like a filter item!
                const header = row.querySelector('label, p, span, div');
                if (header) {
                    templateFilter = header;
@@ -246,6 +277,7 @@ function injectFilterViaClone(templateNode) {
       
     const statusSpan = document.createElement('div');
     statusSpan.id = title === 'Rejected runs' ? 'sr-rr-status' : 'sr-pr-status';
+    statusSpan.textContent = title === 'Rejected runs' ? rrStatusMsg : prStatusMsg;
     statusSpan.style.cssText = 'font-size: 12px; color: #a1a1aa; margin-top: 6px; padding-left: 2px;';
     
     const flexCol = clone.tagName === 'DIV' ? clone : (clone.querySelector('div') || clone); 
@@ -268,20 +300,67 @@ function injectFilterViaClone(templateNode) {
 }
 
 async function applyFilterMode() {
-  const table = document.querySelector('table');
-  if (!table) return;
+  const path = location.pathname.toLowerCase();
+  const isExcludedPage = path.includes('/forums') || path.includes('/thread') || path.includes('/streams') || path.includes('/guides') || path.includes('/resources') || path.includes('/user') || path.includes('/news') || path.includes('/settings');
+  if (isExcludedPage) return;
 
-  const originalRows = document.querySelectorAll('tr:not(.sr-rr-inline-row):not(.empty-state)');
-  const theads = document.querySelectorAll('thead tr');
+  let table = document.querySelector('table:not([data-rr-fake="true"])');
+  let isFakeTable = false;
+  if (!table) {
+    table = document.getElementById('sr-rr-fake-table');
+    if (!table) {
+      table = document.createElement('table');
+      table.id = 'sr-rr-fake-table';
+      table.dataset.rrFake = "true";
+      table.innerHTML = `
+        <thead style="border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent); font-size: 0.75rem; text-transform: uppercase; font-weight: bold; opacity: 0.8; letter-spacing: 0.05em;">
+            <tr>
+                <th style="padding: 12px 16px; text-align: center;">#</th>
+                <th style="padding: 12px 16px; text-align: center;">Players</th>
+                <th style="padding: 12px 16px; text-align: center;">Time</th>
+                <th style="padding: 12px 16px; text-align: center;">Date</th>
+                <th style="padding: 12px 16px; text-align: center;">Platform</th>
+            </tr>
+        </thead>
+        <tbody style="font-size: 0.875rem;"></tbody>
+      `;
+      table.className = "w-full text-left";
+    }
+    isFakeTable = true;
+  }
+
+  const originalRows = isFakeTable ? [] : document.querySelectorAll('tr:not(.sr-rr-inline-row):not(.empty-state)');
+  const theads = isFakeTable ? [] : document.querySelectorAll('thead tr');
+
+  if (!runsInjected) {
+    await fetchAndInjectRuns(table);
+  }
 
   if (rejectedFilterMode === 'hidden' && pendingFilterMode === 'hidden') {
     document.querySelectorAll('.sr-rr-inline-row').forEach(row => row.style.display = 'none');
-    originalRows.forEach(row => row.style.display = '');
+    originalRows.forEach(row => { if (row.style) row.style.display = ''; });
+    if (isFakeTable) {
+        const fakeContainer = document.getElementById('sr-rr-fake-table-container');
+        if (fakeContainer) {
+            fakeContainer.style.display = 'none';
+            if (fakeContainer.dataset.rrEmptyStateHidden === 'true') {
+                const prev = fakeContainer.previousElementSibling;
+                if (prev) prev.style.display = '';
+            }
+        }
+    }
     return;
   }
   
-  if (!runsInjected) {
-    await fetchAndInjectRuns(table);
+  if (isFakeTable) {
+      const fakeContainer = document.getElementById('sr-rr-fake-table-container');
+      if (fakeContainer) {
+          fakeContainer.style.display = '';
+          if (fakeContainer.dataset.rrEmptyStateHidden === 'true') {
+              const prev = fakeContainer.previousElementSibling;
+              if (prev) prev.style.display = 'none';
+          }
+      }
   }
 
   document.querySelectorAll('.sr-rr-inline-row').forEach(row => {
@@ -302,11 +381,11 @@ async function applyFilterMode() {
          row.style.display = 'none';
       }
     });
-    theads.forEach(r => r.style.display = '');
+    theads.forEach(r => { if (r.style) r.style.display = ''; });
   } else {
     originalRows.forEach(row => {
       if (!row.closest('thead')) {
-         row.style.display = '';
+         if (row.style) row.style.display = '';
       }
     });
   }
@@ -350,6 +429,9 @@ async function fetchAndInjectRuns(tableElement) {
   isFetchingRuns = true;
 
   function updateStatus(spanId, text, color = null) {
+    if (spanId === 'sr-rr-status') rrStatusMsg = text;
+    if (spanId === 'sr-pr-status') prStatusMsg = text;
+
     const span = document.getElementById(spanId);
     if (span) {
       span.textContent = text;
@@ -482,10 +564,13 @@ async function fetchAndInjectRuns(tableElement) {
 
     // 3. Строгая локальная фильтрация (API иногда игнорирует параметры или выдает дефолтные)
     let runs = allFetchedRuns.filter(r => {
+      const rLev = r.level?.data?.id || r.level;
       if (targetLevel) {
-        const rLev = r.level?.data?.id || r.level;
         if (rLev && rLev !== targetLevel) return false;
+      } else {
+        if (rLev) return false;
       }
+      
       if (targetCategory) {
         const rCat = r.category?.data?.id || r.category;
         if (rCat && rCat !== targetCategory) return false;
@@ -505,6 +590,7 @@ async function fetchAndInjectRuns(tableElement) {
     if (runs.length === 0) {
       updateStatus('sr-rr-status', '(Отклоненных ранов нет)');
       updateStatus('sr-pr-status', '(Ожидающих ранов нет)');
+      runsInjected = true;
       return;
     }
 
@@ -674,15 +760,30 @@ async function fetchAndInjectRuns(tableElement) {
         const td = document.createElement('td');
         if (templateRow && templateRow.children[i]) {
             td.className = templateRow.children[i].className;
+        } else {
+            td.style.padding = "8px 16px";
+            td.style.verticalAlign = "middle";
         }
         
         td.innerHTML = cellContents[i];
         
-        // Центрируем все колонки кроме игрока
-        if (typeof cellContents[i] !== 'string' || !cellContents[i].includes('color:#d44242;')) {
+        // Центрируем все колонки кроме игрока (которая обычно 2-я)
+        let isPlayerCol = false;
+        if (typeof cellContents[i] === 'string' && cellContents[i].includes('color:#d44242;')) {
+           isPlayerCol = true;
+        } else if (i === 1 && !templateRow) {
+           isPlayerCol = true; 
+        }
+
+        if (!isPlayerCol) {
            td.style.textAlign = 'center';
         }
         
+        if (!templateRow && i === 0) { // Rank column styling fallback
+           td.style.opacity = '0.7';
+           td.style.fontWeight = 'bold';
+        }
+
         tr.appendChild(td);
       }
       
@@ -798,6 +899,56 @@ async function fetchAndInjectRuns(tableElement) {
     }
 
     runsInjected = true;
+    
+    if (tableElement.dataset.rrFake === "true") {
+        if (!document.getElementById('sr-rr-fake-table-container')) {
+            const wrapper = document.createElement('div');
+            wrapper.id = 'sr-rr-fake-table-container';
+            wrapper.className = 'overflow-x-auto w-full';
+            wrapper.appendChild(tableElement);
+            
+            // Look for "No runs found" or similar empty state text
+            let emptyStateEl = null;
+            const treeWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+            let textNode;
+            while ((textNode = treeWalker.nextNode())) {
+                const text = textNode.nodeValue.trim().toLowerCase();
+                if (text.includes('no runs found') || text.includes('no runs matching') || text.includes('no runs have been') || 
+                    text.includes('ранов не найдено') || text.includes('нет ранов') || text.includes('не найдено ни одного рана')) {
+                    
+                    let current = textNode.parentElement;
+                    while (current && current.parentElement && current.parentElement.tagName !== 'MAIN') {
+                        // If the text content is roughly the same length, it's just a structural wrapper
+                        const parentText = current.parentElement.textContent.replace(/\s+/g, ' ').trim();
+                        if (parentText.length <= text.length + 30) {
+                            current = current.parentElement;
+                            const classes = current.className || '';
+                            if (classes.includes('border') || classes.includes('shadow') || classes.includes('rounded')) {
+                                // If we hit the styled card container, we can stop here and use it
+                                emptyStateEl = current;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    if (!emptyStateEl) emptyStateEl = current; // fallback if we didn't find a specific card class
+                    break;
+                }
+            }
+
+            if (emptyStateEl && emptyStateEl.parentElement) {
+                emptyStateEl.parentElement.insertBefore(wrapper, emptyStateEl.nextSibling);
+                // Optionally hide the empty state text
+                emptyStateEl.style.display = 'none';
+                wrapper.dataset.rrEmptyStateHidden = 'true';
+            } else {
+                // Try to find main content relative to filters or document
+                const main = document.querySelector('main') || document.querySelector('[data-reach-tab-panel]') || document.body;
+                main.appendChild(wrapper);
+            }
+        }
+    }
+    
     applyFilterMode(); // Прячем/показываем строки согласно текущему режиму
 
   } catch (error) {
@@ -865,7 +1016,5 @@ setInterval(() => {
   if (lastHref !== location.href) {
     lastHref = location.href;
     runsInjected = false;
-    const table = document.querySelector('table');
-    if (table) delete table.dataset.rrObserved;
   }
 }, 1000);
