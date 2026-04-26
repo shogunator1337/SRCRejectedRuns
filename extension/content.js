@@ -230,18 +230,56 @@ function injectFilterViaClone(templateNode) {
     let selectedBtnClass = '';
     let unselectedBtnClass = '';
     
+    let classCounts = {};
     for (let b of originalButtons) {
-       const bg = window.getComputedStyle(b).getPropertyValue('background-color');
-       const isTransparent = bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent' || bg.replace(/\s+/g,'') === 'rgba(0,0,0,0)';
-       if (!isTransparent) {
-           selectedBtnClass = b.className;
-       } else {
-           unselectedBtnClass = b.className;
-       }
+        classCounts[b.className] = (classCounts[b.className] || 0) + 1;
     }
     
-    if (!selectedBtnClass && originalButtons.length > 0) selectedBtnClass = originalButtons[1]?.className || originalButtons[0].className;
-    if (!unselectedBtnClass && originalButtons.length > 0) unselectedBtnClass = originalButtons[0].className;
+    let uniqueClasses = Object.keys(classCounts).sort((a, b) => classCounts[a] - classCounts[b]);
+    
+    if (uniqueClasses.length > 1) {
+        // Find the "selected" vs "unselected" classes.
+        // We know that one is often Red/Brand, and the other is Black/Gray.
+        // The selected one is usually the minority (frequency 1 out of 3), or defaults to the first button.
+        let classA = uniqueClasses[0]; 
+        let classB = uniqueClasses[1];
+        
+        // Speedrun.com's selected button usually has a solid background (e.g. red/green), 
+        // while unselected buttons often have a secondary/transparent style.
+        // If we simply check which one originalButtons[0] uses, and assume it's the selected one? No, 
+        // the user said they are swapped when we used originalButtons[0] as Unselected.
+        // Let's actually find the one with active terms or fewer buttons using it
+        
+        let c0 = originalButtons[0].className;
+        let c1 = originalButtons.find(b => b.className !== c0)?.className || c0;
+        
+        // A simple trick: in Speedrun.com unselected buttons usually have things like "bg-white/5", "hover:bg-white/10"
+        // while selected is "bg-red-something" or "bg-primary-something"
+        // Let's try to detect the active one using typical speedrun.com classes
+        const isC0Active = c0.includes('bg-red') || c0.includes('bg-green') || c0.includes('bg-primary') || c0.includes('bg-brand') || c0.match(/bg-[a-z]+-700/) || c0.match(/bg-[a-z]+-600/);
+        const isC1Active = c1.includes('bg-red') || c1.includes('bg-green') || c1.includes('bg-primary') || c1.includes('bg-brand') || c1.match(/bg-[a-z]+-700/) || c1.match(/bg-[a-z]+-600/);
+        
+        if (isC0Active && !isC1Active) {
+            selectedBtnClass = c0;
+            unselectedBtnClass = c1;
+        } else if (isC1Active && !isC0Active) {
+            selectedBtnClass = c1;
+            unselectedBtnClass = c0;
+        } else {
+            // Fallback: minority class is selected, majority is unselected
+            if (classCounts[classA] < classCounts[classB]) {
+                selectedBtnClass = classA;
+                unselectedBtnClass = classB;
+            } else {
+                // If frequency is identical, usually originalButtons[0] is the currently selected one
+                selectedBtnClass = c0;
+                unselectedBtnClass = c1;
+            }
+        }
+    } else {
+        selectedBtnClass = uniqueClasses[0];
+        unselectedBtnClass = uniqueClasses[0];
+    }
 
     let btnContainer = clone.querySelector('button')?.parentElement;
     if (!btnContainer) {
