@@ -216,7 +216,11 @@ function injectFilterViaClone(templateNode) {
     
     const svg = clone.querySelector('svg');
     if (svg && iconSvg) {
-      svg.innerHTML = iconSvg;
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(`<svg xmlns="http://www.w3.org/2000/svg">${iconSvg}</svg>`, 'image/svg+xml');
+      while(doc.documentElement.firstChild) {
+          svg.appendChild(doc.documentElement.firstChild);
+      }
       svg.setAttribute('viewBox', '0 0 20 20');
     }
 
@@ -810,7 +814,11 @@ async function fetchAndInjectRuns(tableElement) {
             td.style.verticalAlign = "middle";
         }
         
-        td.innerHTML = cellContents[i];
+        const parser = new DOMParser();
+        const parsedDoc = parser.parseFromString(cellContents[i], 'text/html');
+        while(parsedDoc.body.firstChild) {
+            td.appendChild(parsedDoc.body.firstChild);
+        }
         
         // Центрируем все колонки кроме игрока (которая обычно 2-я)
         let isPlayerCol = false;
