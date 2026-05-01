@@ -461,10 +461,9 @@ function timeToSeconds(timeStr) {
   return isNaN(parsed) ? 99999999 : parsed;
 }
 
-let isFetchingRuns = false;
+let currentFetchId = 0;
 async function fetchAndInjectRuns(tableElement) {
-  if (isFetchingRuns) return;
-  isFetchingRuns = true;
+  const fetchId = ++currentFetchId;
 
   function updateStatus(spanId, text, color = null) {
     if (spanId === 'sr-rr-status') rrStatusMsg = text;
@@ -498,6 +497,7 @@ async function fetchAndInjectRuns(tableElement) {
     // 1. Fetch Game ID
     const gameRes = await fetch(`https://www.speedrun.com/api/v1/games?abbreviation=${gameAbbreviation}`);
     const gameData = await gameRes.json();
+    if (fetchId !== currentFetchId) return;
     
     if (!gameData.data || gameData.data.length === 0) {
       updateStatus('sr-rr-status', '(Игра не найдена)');
@@ -518,6 +518,7 @@ async function fetchAndInjectRuns(tableElement) {
         try {
           const refRes = await fetch(`https://www.speedrun.com/api/v1/runs/${match[1]}`);
           const refData = await refRes.json();
+          if (fetchId !== currentFetchId) return;
           if (refData?.data) {
             targetCategory = refData.data.category;
             targetLevel = refData.data.level;
@@ -557,6 +558,7 @@ async function fetchAndInjectRuns(tableElement) {
       try {
         const varsRes = await fetch(`https://www.speedrun.com/api/v1/games/${gameId}/variables`);
         const varsData = await varsRes.json();
+        if (fetchId !== currentFetchId) return;
         if (varsData?.data) {
           varsData.data.forEach(v => {
             variablesMap[v.name.toLowerCase()] = v;
@@ -597,6 +599,7 @@ async function fetchAndInjectRuns(tableElement) {
     });
     
     const results = await Promise.all(fetchPromises);
+    if (fetchId !== currentFetchId) return;
     const allFetchedRuns = [];
     results.forEach(batch => allFetchedRuns.push(...batch));
 
@@ -952,7 +955,8 @@ async function fetchAndInjectRuns(tableElement) {
             while ((textNode = treeWalker.nextNode())) {
                 const text = textNode.nodeValue.trim().toLowerCase();
                 if (text.includes('no runs found') || text.includes('no runs matching') || text.includes('no runs have been') || 
-                    text.includes('ранов не найдено') || text.includes('нет ранов') || text.includes('не найдено ни одного рана')) {
+                    text.includes('ранов не найдено') || text.includes('нет ранов') || text.includes('не найдено ни одного рана') ||
+                    text.includes('записи не найдены')) {
                     
                     let current = textNode.parentElement;
                     while (current && current.parentElement && current.parentElement.tagName !== 'MAIN') {
@@ -980,9 +984,9 @@ async function fetchAndInjectRuns(tableElement) {
                 emptyStateEl.style.display = 'none';
                 wrapper.dataset.rrEmptyStateHidden = 'true';
             } else {
-                // Try to find main content relative to filters or document
-                const main = document.querySelector('main') || document.querySelector('[data-reach-tab-panel]') || document.body;
-                main.appendChild(wrapper);
+                // If we didn't find the empty state text, we are likely not on a leaderboard page, or it's a layout we don't recognize.
+                // It's safer to not inject the fake table at all than to randomly inject it on the homepage.
+                console.warn('[Speedrun.com Extension] Could not find empty state text, fake table injection aborted to prevent misplacement.');
             }
         }
     }
@@ -992,8 +996,6 @@ async function fetchAndInjectRuns(tableElement) {
   } catch (error) {
     console.error(error);
     updateStatus('(Ошибка загрузки API)');
-  } finally {
-    isFetchingRuns = false;
   }
 }
 
