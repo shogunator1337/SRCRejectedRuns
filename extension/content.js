@@ -489,9 +489,13 @@ async function fetchAndInjectRuns(tableElement) {
       pathParts.shift();
     }
     
-    let gameAbbreviation = pathParts[0] || 'morrowind';
+    let gameAbbreviation = pathParts[0];
     if (gameAbbreviation === 'games' && pathParts[1]) {
       gameAbbreviation = pathParts[1];
+    }
+    
+    if (!gameAbbreviation) {
+      return;
     }
 
     // 1. Fetch Game ID
